@@ -17,3 +17,4 @@ staticfiles/
 # Environment
 .env
 .env.local
+.github

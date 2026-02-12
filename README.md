@@ -515,7 +515,3 @@ This project is for assessment purposes. Code may be used for educational refere
 - **OSRM Project**: Free routing API
 - **OpenStreetMap/Nominatim**: Free geocoding
 - **Fuel Price Data**: Provided in assessment dataset
-
----
-
-**Built with ❤️ using Django 6.0** 🚀

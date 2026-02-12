@@ -1,21 +1,13 @@
 """
-Geometric utilities for route analysis - OPTIMIZED VERSION.
+Geometric utilities for route analysis.
 
 Provides functions to:
-1. Calculate haversine distance
+1. Decode polyline from OSRM
 2. Calculate perpendicular distance from point to route
-3. Find stations along the route geometrically (with optimizations)
-
-Performance optimizations:
-- Bounding box pre-filter (eliminates 80% of stations instantly)
-- Route sampling (100 max points vs 500+ for long routes)
-- Reduced O(n*m) complexity from ~180,000 to ~5,000 operations
+3. Find stations along the route geometrically
 """
 import numpy as np
 from typing import List, Tuple
-import logging
-
-logger = logging.getLogger(__name__)
 
 
 def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -31,7 +23,7 @@ def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
     delta_lat = np.radians(lat2 - lat1)
     delta_lon = np.radians(lon2 - lon1)
     
-    a = (np.sin(delta_lat / 2) ** 2 +
+    a = (np.sin(delta_lat / 2) ** 2 + 
          np.cos(lat1_rad) * np.cos(lat2_rad) * np.sin(delta_lon / 2) ** 2)
     c = 2 * np.arcsin(np.sqrt(a))
     
@@ -53,7 +45,7 @@ def point_to_segment_distance(
     
     Args:
         point_lat, point_lon: Coordinates of the point (fuel station)
-        seg_start_lat, seg_start_lon: Start of line segment (route segment)
+        seg_start_lat, seg_start_lon: Start of line segment (route segment) 
         seg_end_lat, seg_end_lon: End of line segment
         
     Returns:
@@ -98,16 +90,18 @@ def point_to_segment_distance(
 
 def find_stations_along_route(
     route_coordinates: List[Tuple[float, float]],  # List of (lon, lat) from OSRM
-    stations: List,  # QuerySet or list of FuelStation objects
+    stations: List,  # QuerySet orlist of FuelStation objects
     max_distance_miles: float = 15.0
 ) -> List[Tuple[object, float]]:
     """
     Find all fuel stations within max_distance of the route polyline.
     
-    OPTIMIZED VERSION with:
-    - Bounding box pre-filter (eliminates ~80% of stations immediately)
-    - Route sampling (100 max points instead of 500+ for long routes)
-    - Reduces complexity from O(stations × route_points) to manageable size
+    This is the GEOMETRIC APPROACH (more accurate than radius search).
+    
+    For each station:
+        1. Check distance to each route segment
+        2. If any segment is within max_distance, station is "on route"
+        3. Calculate chainage (distance along route to nearest point)
     
     Args:
         route_coordinates: List of (longitude, latitude) pairs from routing API
@@ -117,76 +111,28 @@ def find_stations_along_route(
     Returns:
         List of (station, chainage_miles) tuples sorted by chainage
     """
-    if not route_coordinates or len(route_coordinates) < 2:
-        logger.warning("Route has no coordinates")
-        return []
-    
-    # Convert QuerySet to list ONCE to avoid re-evaluation
-    stations_list = list(stations)
-    logger.info(f"🔍 GEOMETRY FILTER START: {len(stations_list)} stations, {len(route_coordinates)} route points")
-    
     on_route_stations = []
     
-    # ========== OPTIMIZATION 1: Bounding Box Filter ==========
-    # Extract lat/lon bounds
-    lons = [lon for lon, lat in route_coordinates]
-    lats = [lat for lon, lat in route_coordinates]
-    min_lon, max_lon = min(lons), max(lons)
-    min_lat, max_lat = min(lats), max(lats)
-    
-    logger.info(f"📍 Route bounds: lon[{min_lon:.2f}, {max_lon:.2f}], lat[{min_lat:.2f}, {max_lat:.2f}]")
-    logger.info(f"📍 Route span: {max_lon - min_lon:.2f}° wide, {max_lat - min_lat:.2f}° tall")
-    
-    # Add buffer (~69 miles per degree at equator)
-    buffer_degrees = max_distance_miles / 69.0
-    min_lon -= buffer_degrees
-    max_lon += buffer_degrees
-    min_lat -= buffer_degrees
-    max_lat += buffer_degrees
-    
-    logger.info(f"📦 Bounding box (with {max_distance_miles}mi buffer): lat[{min_lat:.2f}, {max_lat:.2f}], lon[{min_lon:.2f}, {max_lon:.2f}]")
-    
-    # ========== OPTIMIZATION 2: Route Sampling ==========
-    # For long routes (500+ points), sample to ~100 points max
-    sample_rate = max(1, len(route_coordinates) // 100)
-    sampled_coords = route_coordinates[::sample_rate]
-    
-    # Always include the last point
-    if route_coordinates[-1] not in sampled_coords:
-        sampled_coords.append(route_coordinates[-1])
-    
-    logger.info(f"Sampled route from {len(route_coordinates)} to {len(sampled_coords)} points (sample_rate={sample_rate})")
-    
-    # Pre-calculate cumulative distances (using sampled points)
+    # Pre-calculate cumulative distances along route
     cumulative_distances = [0.0]
-    for i in range(len(sampled_coords) - 1):
-        lon1, lat1 = sampled_coords[i]
-        lon2, lat2 = sampled_coords[i + 1]
+    for i in range(len(route_coordinates) - 1):
+        lon1, lat1 = route_coordinates[i]
+        lon2, lat2 = route_coordinates[i + 1]
         segment_distance = haversine_distance(lat1, lon1, lat2, lon2)
         cumulative_distances.append(cumulative_distances[-1] + segment_distance)
     
-    # ========== Station Filtering ==========
-    stations_in_bbox = 0
-    stations_on_route = 0
-    
-    for station in stations_list:
+    # Check each station
+    for station in stations:
         if not station.geocoded or station.latitude is None:
             continue
-        
-        # Bounding box filter (FAST - simple comparison)
-        if not (min_lon <= station.longitude <= max_lon and
-                min_lat <= station.latitude <= max_lat):
-            continue
-        
-        stations_in_bbox += 1
         
         min_distance = float('inf')
         best_chainage = 0.0
         
-        # Check distance to sampled route segments
-        for i in range(len(sampled_coords) - 1):
-            lon1, lat1 = sampled_coords[i]
-            lon2, lat2 = sampled_coords[i + 1]
+        # Check distance to each route segment
+        for i in range(len(route_coordinates) - 1):
+            lon1, lat1 = route_coordinates[i]
+            lon2, lat2 = route_coordinates[i + 1]
             
             distance = point_to_segment_distance(
                 station.latitude, station.longitude,
@@ -196,14 +142,12 @@ def find_stations_along_route(
             
             if distance < min_distance:
                 min_distance = distance
+                # Chainage is cumulative distance to start of this segment
                 best_chainage = cumulative_distances[i]
         
         # If station is within max_distance of route, include it
         if min_distance <= max_distance_miles:
             on_route_stations.append((station, best_chainage))
-            stations_on_route += 1
-    
-    logger.info(f"✅ FILTER RESULTS: {stations_in_bbox} in bbox → {stations_on_route} on-route ({100*stations_on_route/(stations_in_bbox or 1):.1f}% pass distance check)")
     
     # Sort by chainage (distance from start)
     on_route_stations.sort(key=lambda x: x[1])

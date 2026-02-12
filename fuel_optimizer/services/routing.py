@@ -66,10 +66,14 @@ class OSRMRoutingService:
             min_delay_seconds=1.0,
             max_retries=2
         )
+        # In-memory cache for geocoded addresses (avoids repeated API calls)
+        self._geocode_cache = {}
         
     def geocode_address(self, address: str) -> Optional[tuple[float, float]]:
         """
         Convert an address string to coordinates.
+        
+        Uses in-memory cache to avoid repeated geocoding of same addresses.
         
         Args:
             address: Address string (e.g., "New York, NY" or "123 Main St, Boston, MA")
@@ -77,14 +81,24 @@ class OSRMRoutingService:
         Returns:
             Tuple of (latitude, longitude) or None if geocoding fails
         """
+        # Check cache first
+        cache_key = address.strip().lower()
+        if cache_key in self._geocode_cache:
+            coords = self._geocode_cache[cache_key]
+            logger.info(f"Geocoded '{address}' from cache: {coords}")
+            return coords
+        
         try:
             # Add USA to help with geocoding
             query = f"{address}, USA"
             location = self._rate_limited_geocode(query)
             
             if location:
-                logger.info(f"Geocoded '{address}' to ({location.latitude}, {location.longitude})")
-                return (location.latitude, location.longitude)
+                coords = (location.latitude, location.longitude)
+                # Cache the result
+                self._geocode_cache[cache_key] = coords
+                logger.info(f"Geocoded '{address}' to {coords}")
+                return coords
             else:
                 logger.warning(f"Could not geocode address: {address}")
                 return None

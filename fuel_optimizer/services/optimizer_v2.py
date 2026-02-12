@@ -93,20 +93,10 @@ class OptimizedFuelRouteOptimizer:
         
         logger.info(f"Route: {route.distance_miles} miles, {route.duration_hours} hours")
         
-        # Step 2: Get states along route for DB filtering
-        states = self._extract_states_from_addresses(start_address, end_address)
+        # Step 2: Query ALL geocoded stations (bounding box will filter geographically)
+        stations = FuelStation.objects.filter(geocoded=True).order_by('retail_price')
         
-        # Step 3: Query database for stations in these states
-        if states:
-            stations = FuelStation.objects.filter(
-                state__in=states,
-                geocoded=True
-            ).order_by('retail_price')
-        else:
-            # Fallback: query all geocoded stations
-            stations = FuelStation.objects.filter(geocoded=True).order_by('retail_price')
-        
-        logger.info(f"Found {stations.count()} geocoded stations in states: {states}")
+        logger.info(f"Querying {stations.count()} geocoded stations (will filter by route geometry)")
         
         # Step 4: Geometric filtering - find stations truly along route
         on_route_stations = find_stations_along_route(
